@@ -26,7 +26,6 @@ from i18n.execute import execute
 
 LOG = logging.getLogger(__name__)
 DEVNULL = open(os.devnull, "wb")
-DUPLICATE_ENTRY_PATTERN = re.compile('#-#-#-#-#.*#-#-#-#-#')
 
 
 def merge(configuration, locale, target='django.po', sources=('django-partial.po',), fail_if_missing=True):
@@ -51,25 +50,16 @@ def merge(configuration, locale, target='django.po', sources=('django-partial.po
         raise
 
     # merged file is merged.po
-    merge_cmd = 'msgcat -o merged.po ' + ' '.join(sources)
+    merge_cmd = 'msgcat --use-first -o merged.po ' + ' '.join(sources)
     execute(merge_cmd, working_directory=locale_directory)
 
     # clean up redunancies in the metadata
     merged_filename = locale_directory.joinpath('merged.po')
-    duplicate_entries = clean_pofile(merged_filename)
+    clean_pofile(merged_filename)
 
     # rename merged.po -> django.po (default)
     target_filename = locale_directory.joinpath(target)
     os.rename(merged_filename, target_filename)
-
-    # Write duplicate messages to a file
-    if duplicate_entries:
-        dup_file = target_filename.replace(".po", ".dup")
-        with codecs.open(dup_file, "w", encoding="utf8") as dfile:
-            for (entry, translations) in duplicate_entries:
-                dfile.write(u"{}\n".format(entry))
-                dfile.write(u"Translations found were:\n\t{}\n\n".format(translations))
-        LOG.warning(" %s duplicates in %s, details in .dup file", len(duplicate_entries), target_filename)
 
 
 def merge_files(configuration, locale, fail_if_missing=True):
@@ -91,7 +81,6 @@ def clean_pofile(pofile_path):
         - Removes occurrence line numbers so that the generated files don't
           generate a lot of line noise when they're committed.
 
-    Returns a list of any duplicate entries found.
     """
     # Reading in the .po file and saving it again fixes redundancies.
     pomsgs = pofile(pofile_path)
@@ -102,37 +91,8 @@ def clean_pofile(pofile_path):
     for entry in pomsgs:
         # Remove line numbers
         entry.occurrences = [(filename, None) for filename, __ in entry.occurrences]
-        # Check for merge conflicts. Pick the first, and emit a warning.
-        if 'fuzzy' in entry.flags:
-            # Remove fuzzy from flags
-            entry.flags = [f for f in entry.flags if f != 'fuzzy']
-            # Save a warning message
-            dup_msg = 'Multiple translations found for single string.\n\tString "{0}"\n\tPresent in files {1}'.format(
-                entry.msgid,
-                [f for (f, __) in entry.occurrences]
-            )
-            duplicate_entries.append((dup_msg, entry.msgstr))
-
-            # Pick the first entry
-            for msgstr in DUPLICATE_ENTRY_PATTERN.split(entry.msgstr):
-                # Ignore any empty strings that may result from the split call
-                if msgstr:
-                    # Set the first one we find to be the right one. Strip to remove extraneous
-                    # new lines that exist.
-                    entry.msgstr = msgstr.strip()
-
-                    # Raise error if there's new lines starting or ending the id string.
-                    if entry.msgid.startswith('\n') or entry.msgid.endswith('\n'):
-                        raise ValueError(
-                            u'{} starts or ends with a new line character, which is not allowed. '
-                            'Please fix before continuing. Source string is found in {}'.format(
-                                entry.msgid, entry.occurrences
-                            ).encode('utf-8')
-                        )
-                    break
 
     pomsgs.save()
-    return duplicate_entries
 
 
 def validate_files(directory, files_to_merge):
